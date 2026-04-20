@@ -46,6 +46,13 @@
   .btn-import:hover { background: #2563EB; }
   .btn-export { background: var(--green); color: white; }
   .btn-export:hover { background: #059669; }
+  .btn-save-local { background: #F59E0B; color: white; }
+  .btn-save-local:hover { background: #D97706; }
+  .save-indicator {
+    font-size: 11px; color: #86EFAC; display: flex; align-items: center; gap: 4px;
+    opacity: 0; transition: opacity 0.5s;
+  }
+  .save-indicator.show { opacity: 1; }
 
   /* NAV TABS */
   .nav { display: flex; background: white; border-bottom: 2px solid var(--gray-200); padding: 0 24px; overflow-x: auto; }
@@ -179,6 +186,17 @@
   .btn-save { padding: 10px 20px; background: var(--accent-blue); color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
   .btn-save:hover { background: #2563EB; }
 
+  /* AUTO-FILL HINT */
+  .autofill-hint {
+    margin-top: 6px; padding: 6px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;
+    display: none; align-items: center; gap: 6px;
+  }
+  .autofill-hint.found { display: flex; background: #D1FAE5; color: var(--dark-green); border: 1px solid #A7F3D0; }
+  .autofill-hint.notfound { display: flex; background: #FEF3C7; color: var(--dark-orange); border: 1px solid #FDE68A; }
+
+  /* DATALIST suggestions */
+  input[list] { position: relative; }
+
   /* TOAST */
   .toast {
     position: fixed; bottom: 24px; right: 24px; background: var(--dark-blue); color: white;
@@ -217,9 +235,11 @@
     <div class="subtitle" id="updateDate">Sistema de Control de Herramientas, Equipos y Mantenimiento</div>
   </div>
   <div class="topbar-actions">
+    <span class="save-indicator" id="saveIndicator">✅ Guardado</span>
     <input type="file" id="fileInput" accept=".xlsx,.xls" style="display:none" />
     <button class="btn-import" onclick="document.getElementById('fileInput').click()">📂 Importar Excel</button>
-    <button class="btn-export" onclick="exportToExcel()">💾 Exportar Excel</button>
+    <button class="btn-save-local" onclick="saveToStorage(true)">💾 Guardar Datos</button>
+    <button class="btn-export" onclick="exportToExcel()">📤 Exportar Excel</button>
   </div>
 </div>
 
@@ -380,13 +400,62 @@ const CAT_NAMES = {
 const CAT_COLORS = {
   ELC: '#3B82F6', ELT: '#8B5CF6', HMA: '#10B981', INS: '#F59E0B', MEC: '#EF4444', MED: '#06B6D4'
 };
+const STORAGE_KEY = 'stm_inventario_data';
 
 let DATA = { inventario: [], mantenimiento: [], bajas: [], movimientos: [] };
 let PAGE = { inventario: 1, mantenimiento: 1, bajas: 1, movimientos: 1 };
 const PER_PAGE = 50;
 
 // =====================================================
-// INIT: Load Excel on start
+// LOCAL STORAGE — GUARDAR Y CARGAR
+// =====================================================
+function saveToStorage(showMsg) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA));
+    localStorage.setItem(STORAGE_KEY + '_ts', new Date().toISOString());
+    if (showMsg) {
+      toast('Datos guardados correctamente ✅', 'success');
+    }
+    // Parpadeo del indicador en topbar
+    const ind = document.getElementById('saveIndicator');
+    ind.classList.add('show');
+    setTimeout(() => ind.classList.remove('show'), 2000);
+  } catch(e) {
+    if (showMsg) toast('Error al guardar: ' + e.message, 'error');
+  }
+}
+
+function loadFromStorage() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.inventario) {
+      DATA = parsed;
+      const ts = localStorage.getItem(STORAGE_KEY + '_ts');
+      if (ts) {
+        const d = new Date(ts);
+        const label = d.toLocaleDateString('es-CO') + ' ' + d.toLocaleTimeString('es-CO', {hour:'2-digit',minute:'2-digit'});
+        document.getElementById('updateDate').textContent =
+          `Sistema de Control STM  |  Última actualización: ${label}`;
+      }
+      return true;
+    }
+  } catch(e) {}
+  return false;
+}
+
+function clearStorage() {
+  if (!confirm('¿Estás seguro de limpiar todos los datos guardados? Esta acción no se puede deshacer.')) return;
+  localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(STORAGE_KEY + '_ts');
+  DATA = { inventario: [], mantenimiento: [], bajas: [], movimientos: [] };
+  renderAll();
+  toast('Datos eliminados. Importa un Excel para cargar.', 'success');
+}
+
+// =====================================================
+// IMPORT EXCEL
 // =====================================================
 document.getElementById('fileInput').addEventListener('change', function(e) {
   const file = e.target.files[0];
@@ -520,6 +589,7 @@ function loadWorkbook(wb) {
   }
 
   renderAll();
+  saveToStorage(false); // Auto-guardar al importar
 }
 
 // =====================================================
@@ -726,11 +796,9 @@ function renderTable(key) {
   const start = (page - 1) * PER_PAGE;
   const pageData = data.slice(start, start + PER_PAGE);
 
-  // Header
   const shortKey = key === 'inventario' ? 'Inv' : key === 'mantenimiento' ? 'Mtto' : key === 'bajas' ? 'Baja' : 'Mov';
   document.getElementById('thead' + shortKey).innerHTML = '<tr>' + cfg.headers.map(h => `<th>${h}</th>`).join('') + '<th>Acción</th></tr>';
 
-  // Body
   let html = '';
   if (pageData.length === 0) {
     html = `<tr><td colspan="${cfg.headers.length + 1}"><div class="empty-state"><div class="icon">📂</div><p>No hay datos. Importa el Excel o agrega registros.</p></div></td></tr>`;
@@ -760,7 +828,6 @@ function renderTable(key) {
   }
   document.getElementById('tbody' + shortKey).innerHTML = html;
 
-  // Pagination
   const pagEl = document.getElementById('pag' + shortKey);
   pagEl.innerHTML = `
     <span>Mostrando ${data.length ? start+1 : 0}–${Math.min(start+PER_PAGE, data.length)} de ${data.length} registros</span>
@@ -783,7 +850,79 @@ function deleteRow(key, idx) {
   if (!confirm('¿Estás seguro de eliminar este registro?')) return;
   DATA[key].splice(idx, 1);
   renderAll();
+  saveToStorage(false);
   toast('Registro eliminado', 'success');
+}
+
+// =====================================================
+// AUTO-FILL: buscar en inventario por código
+// =====================================================
+function buildCodeDatalist() {
+  // Construir datalist con los códigos del inventario para sugerencias
+  let existing = document.getElementById('inv-codes-list');
+  if (existing) existing.remove();
+  const dl = document.createElement('datalist');
+  dl.id = 'inv-codes-list';
+  DATA.inventario.forEach(item => {
+    const opt = document.createElement('option');
+    opt.value = item.codigo;
+    opt.label = item.equipo + (item.marca ? ' — ' + item.marca : '');
+    dl.appendChild(opt);
+  });
+  document.body.appendChild(dl);
+}
+
+function setupAutoFill(modalType) {
+  buildCodeDatalist();
+  const codigoInput = document.getElementById('f_codigo');
+  if (!codigoInput) return;
+
+  // Conectar datalist para sugerencias mientras escribe
+  codigoInput.setAttribute('list', 'inv-codes-list');
+
+  codigoInput.addEventListener('input', function() {
+    const code = this.value.trim();
+    const hint = document.getElementById('autofill-hint');
+    const item = DATA.inventario.find(r => r.codigo.toUpperCase() === code.toUpperCase());
+
+    if (item) {
+      // Rellenar campos según el tipo de modal
+      if (modalType === 'mtto') {
+        setFieldVal('f_equipo', item.equipo);
+        setFieldVal('f_marca', item.marca);
+        setFieldVal('f_modelo', item.modelo);
+      } else if (modalType === 'baja') {
+        // Equipo/Marca combinados como aparece en la hoja de bajas
+        setFieldVal('f_equipo', item.equipo + (item.marca ? ' ' + item.marca : ''));
+        setFieldVal('f_serial', item.serie || item.modelo);
+      } else if (modalType === 'mov') {
+        setFieldVal('f_equipo', item.equipo);
+        setFieldVal('f_cantidad', item.cantidad);
+      }
+
+      if (hint) {
+        hint.className = 'autofill-hint found';
+        hint.innerHTML = `✅ Encontrado: <strong>${item.equipo}</strong>${item.marca ? ' — ' + item.marca : ''}${item.modelo ? ' / ' + item.modelo : ''}`;
+      }
+    } else {
+      // Limpiar hint si no hay coincidencia
+      if (hint) {
+        if (code.length > 2) {
+          hint.className = 'autofill-hint notfound';
+          hint.innerHTML = `⚠️ Código no encontrado en inventario — puedes ingresarlo manualmente`;
+        } else {
+          hint.className = 'autofill-hint';
+        }
+      }
+    }
+  });
+}
+
+function setFieldVal(id, val) {
+  const el = document.getElementById(id);
+  if (el && val !== undefined && val !== null && String(val) !== '') {
+    el.value = val;
+  }
 }
 
 // =====================================================
@@ -797,6 +936,9 @@ function openModal(type) {
   const title = document.getElementById('modalTitle');
   const body = document.getElementById('modalBody');
   const saveBtn = document.getElementById('btnModalSave');
+
+  // HTML del hint de auto-fill (se incluye en modales que lo necesiten)
+  const autoFillHint = `<div id="autofill-hint" class="autofill-hint"></div>`;
 
   if (type === 'inv') {
     title.textContent = 'Agregar Equipo al Inventario';
@@ -824,18 +966,24 @@ function openModal(type) {
         <div class="form-group"><label>Cantidad</label><input id="f_cantidad" type="number" value="1" min="1"></div>
       </div>
     `;
+
   } else if (type === 'mtto') {
     title.textContent = 'Agregar Plan de Mantenimiento';
     body.innerHTML = `
-      <div class="form-row">
-        <div class="form-group"><label>Código Interno *</label><input id="f_codigo" placeholder="Ej: ELC-001"></div>
-        <div class="form-group"><label>Equipo *</label><input id="f_equipo"></div>
+      <div class="form-group">
+        <label>Código Interno * <span style="color:var(--accent-blue);font-weight:400">(escribe el código para auto-completar)</span></label>
+        <input id="f_codigo" placeholder="Ej: ELC-001 — se auto-completa con datos del inventario">
+        ${autoFillHint}
       </div>
       <div class="form-row">
-        <div class="form-group"><label>Marca</label><input id="f_marca"></div>
-        <div class="form-group"><label>Modelo</label><input id="f_modelo"></div>
+        <div class="form-group"><label>Equipo *</label><input id="f_equipo" placeholder="Se llena automáticamente"></div>
+        <div class="form-group"><label>Marca</label><input id="f_marca" placeholder="Se llena automáticamente"></div>
       </div>
-      <div class="form-group"><label>Descripción</label><textarea id="f_descripcion" rows="2"></textarea></div>
+      <div class="form-row">
+        <div class="form-group"><label>Modelo</label><input id="f_modelo" placeholder="Se llena automáticamente"></div>
+        <div class="form-group"><label>Serie / Lote</label><input id="f_serie"></div>
+      </div>
+      <div class="form-group"><label>Descripción</label><textarea id="f_descripcion" rows="2" placeholder="Descripción o actividades de mantenimiento"></textarea></div>
       <div class="form-row">
         <div class="form-group"><label>Disposición</label>
           <select id="f_disposicion">
@@ -857,15 +1005,20 @@ function openModal(type) {
         </div>
       </div>
     `;
+    // Activar auto-fill después de renderizar
+    setTimeout(() => setupAutoFill('mtto'), 50);
+
   } else if (type === 'baja') {
     title.textContent = 'Registrar Baja de Activo';
     body.innerHTML = `
-      <div class="form-row">
-        <div class="form-group"><label>N° Equipo / Código *</label><input id="f_codigo" placeholder="Ej: ELC-010 o SIN CODIGO"></div>
-        <div class="form-group"><label>Equipo / Marca *</label><input id="f_equipo"></div>
+      <div class="form-group">
+        <label>N° Equipo / Código * <span style="color:var(--accent-blue);font-weight:400">(escribe el código para auto-completar)</span></label>
+        <input id="f_codigo" placeholder="Ej: ELC-010 — se auto-completa con datos del inventario">
+        ${autoFillHint}
       </div>
+      <div class="form-group"><label>Equipo / Marca *</label><input id="f_equipo" placeholder="Se llena automáticamente"></div>
       <div class="form-row">
-        <div class="form-group"><label>Serial o Modelo</label><input id="f_serial"></div>
+        <div class="form-group"><label>Serial o Modelo</label><input id="f_serial" placeholder="Se llena automáticamente"></div>
         <div class="form-group"><label>Valor Activo ($)</label><input id="f_valor" type="number"></div>
       </div>
       <div class="form-row">
@@ -877,6 +1030,8 @@ function openModal(type) {
         </div>
       </div>
     `;
+    setTimeout(() => setupAutoFill('baja'), 50);
+
   } else if (type === 'mov') {
     title.textContent = 'Registrar Movimiento';
     body.innerHTML = `
@@ -886,10 +1041,12 @@ function openModal(type) {
           <select id="f_tipo"><option>SALIDA</option><option>ENTRADA</option></select>
         </div>
       </div>
-      <div class="form-row">
-        <div class="form-group"><label>Código *</label><input id="f_codigo" placeholder="Ej: ELC-001"></div>
-        <div class="form-group"><label>Equipo *</label><input id="f_equipo"></div>
+      <div class="form-group">
+        <label>Código * <span style="color:var(--accent-blue);font-weight:400">(escribe el código para auto-completar)</span></label>
+        <input id="f_codigo" placeholder="Ej: ELC-001 — se auto-completa con datos del inventario">
+        ${autoFillHint}
       </div>
+      <div class="form-group"><label>Equipo *</label><input id="f_equipo" placeholder="Se llena automáticamente"></div>
       <div class="form-row">
         <div class="form-group"><label>Cantidad</label><input id="f_cantidad" type="number" value="1" min="1"></div>
         <div class="form-group"><label>Responsable *</label><input id="f_responsable"></div>
@@ -901,6 +1058,7 @@ function openModal(type) {
       </div>
       <div class="form-group"><label>Observaciones</label><textarea id="f_obs" rows="2"></textarea></div>
     `;
+    setTimeout(() => setupAutoFill('mov'), 50);
   }
 
   saveBtn.onclick = () => saveModal();
@@ -926,21 +1084,25 @@ function saveModal() {
     if (!gv('f_codigo') || !gv('f_equipo')) { toast('Código y Equipo son obligatorios', 'error'); return; }
     DATA.mantenimiento.push({
       codigo: gv('f_codigo'), equipo: gv('f_equipo'), marca: gv('f_marca'), modelo: gv('f_modelo'),
-      serie: '', descripcion: gv('f_descripcion'), dispSeguridad: '', inspecciones: gv('f_inspecciones'),
+      serie: gv('f_serie'), descripcion: gv('f_descripcion'), dispSeguridad: '', inspecciones: gv('f_inspecciones'),
       fechaCompra: '', vidaUtil: gv('f_vidautil'), disposicion: gv('f_disposicion'),
       frecuencia: gv('f_frecuencia'), estado: 'ACTIVO'
     });
+    // Marcar el item en inventario como en plan de mantenimiento
+    const invItem = DATA.inventario.find(r => r.codigo.toUpperCase() === gv('f_codigo').toUpperCase());
+    if (invItem) invItem.enMtto = 'Sí';
   } else if (type === 'baja') {
     if (!gv('f_codigo') || !gv('f_equipo')) { toast('Código y Equipo son obligatorios', 'error'); return; }
     const code = gv('f_codigo');
-    const cat = code.match(/^[A-Z]{3}/) ? CAT_NAMES[code.substring(0,3)] || '' : '';
+    const catKey = code.match(/^[A-Z]{3}/) ? code.substring(0,3) : '';
+    const cat = CAT_NAMES[catKey] || '';
     DATA.bajas.push({
       codigo: code, equipo: gv('f_equipo'), serial: gv('f_serial'),
       valor: gv('f_valor') ? Number(gv('f_valor')) : '', tratamiento: gv('f_tratamiento'),
       motivo: gv('f_motivo'), categoria: cat
     });
-    // Also update inventario status if exists
-    const invItem = DATA.inventario.find(r => r.codigo === code);
+    // Actualizar estado en inventario
+    const invItem = DATA.inventario.find(r => r.codigo.toUpperCase() === code.toUpperCase());
     if (invItem) { invItem.estado = 'BAJA'; invItem.observaciones = 'Dado de baja — ver pestaña BAJA DE ACTIVOS'; }
   } else if (type === 'mov') {
     if (!gv('f_codigo') || !gv('f_equipo') || !gv('f_responsable')) { toast('Campos obligatorios incompletos', 'error'); return; }
@@ -954,7 +1116,8 @@ function saveModal() {
 
   closeModal();
   renderAll();
-  toast('Registro agregado correctamente', 'success');
+  saveToStorage(false); // Auto-guardar en cada nuevo registro
+  toast('Registro agregado y guardado correctamente ✅', 'success');
 }
 
 // =====================================================
@@ -1001,13 +1164,18 @@ function toast(msg, type) {
 }
 
 // =====================================================
-// AUTO-LOAD: Try to fetch default Excel via URL param
+// INIT: cargar desde localStorage o arrancar vacío
 // =====================================================
 (function init() {
   document.getElementById('updateDate').textContent =
     `Sistema de Control de Herramientas, Equipos y Mantenimiento  |  ${new Date().toLocaleDateString('es-CO')}`;
+
+  const loaded = loadFromStorage();
   renderAll();
+
+  if (loaded) {
+    toast(`Datos cargados: ${DATA.inventario.length} equipos en inventario`, 'success');
+  }
 })();
 </script>
 </body>
-</html>
